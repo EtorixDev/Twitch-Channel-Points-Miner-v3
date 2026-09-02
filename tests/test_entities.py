@@ -23,7 +23,9 @@ def drop_data():
 
 
 def test_drop_parses_benefit_and_updates_progress():
-    drop = Drop(drop_data())
+    data = drop_data()
+    data["requiredSubs"] = 2
+    drop = Drop(data)
 
     drop.update(
         {
@@ -36,6 +38,7 @@ def test_drop_parses_benefit_and_updates_progress():
 
     assert drop.benefit == "Badge"
     assert drop.item_art_url == "https://image.test/a.png"
+    assert drop.required_subs == 2
     assert drop.percentage_progress == 1
     assert drop.is_printable is True
     assert drop.is_claimable is True
@@ -66,6 +69,7 @@ def test_drop_accepts_missing_benefit_edges():
     assert drop.benefit_edges == []
     assert drop.benefit == ""
     assert drop.item_art_url is None
+    assert drop.required_subs == 0
 
 
 def test_drop_becomes_unclaimable_after_claim():

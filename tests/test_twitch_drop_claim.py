@@ -412,6 +412,29 @@ def test_campaign_deadline_logs_unknown_for_malformed_game(monkeypatch, caplog):
     assert "Enough time for [Unknown Game] Example Campaign - Reward:" in caplog.text
 
 
+def test_subscription_gated_drop_is_not_actionable_by_watching(monkeypatch):
+    twitch = bare_twitch(monkeypatch)
+    campaign = campaign_data()
+    campaign["timeBasedDrops"][0]["requiredSubs"] = 1
+    campaign["timeBasedDrops"][0]["self"] = {
+        "hasPreconditionsMet": True,
+        "currentMinutesWatched": 0,
+        "dropInstanceID": None,
+        "isClaimed": False,
+    }
+
+    assert twitch._Twitch__has_incomplete_drop_in_campaign(campaign) is False
+    assert (
+        twitch._Twitch__active_incomplete_drop_deadline(
+            campaign,
+            completed_drop_ids=set(),
+            awarded_benefit_ids=set(),
+            awarded_benefit_fingerprints=set(),
+        )
+        is None
+    )
+
+
 def test_claiming_final_drop_waits_for_inventory_confirmation(monkeypatch):
     twitch = bare_twitch(monkeypatch)
     campaign = Campaign(campaign_data())

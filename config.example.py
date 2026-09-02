@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Copy this template to config/config.py and review each setting before use.
 
-CONFIG_VERSION = 7
+CONFIG_VERSION = 8
 
 import logging
 from colorama import Fore
@@ -180,6 +180,7 @@ STREAMERS = [
 MINE_CONFIG = {
     'followers': False,
     'followers_order': FollowersOrder.ASC,
+    'followers_refresh_interval_hours': 1,       # Add newly followed channels without restarting; set to 0 to disable
     'categories': [
         "rust",
         "gray-zone-warfare",

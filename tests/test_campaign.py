@@ -51,6 +51,16 @@ def test_clear_drops_removes_claimed_and_inactive_drops():
     assert campaign.drops == []
 
 
+def test_clear_drops_removes_subscription_gated_drops():
+    data = campaign_data()
+    data["timeBasedDrops"][0]["requiredSubs"] = 1
+    campaign = Campaign(data)
+
+    campaign.clear_drops()
+
+    assert [drop.id for drop in campaign.drops] == ["drop-2"]
+
+
 def test_sync_drops_updates_matching_drop_and_invokes_claim_callback():
     campaign = Campaign(campaign_data())
     claimed = []

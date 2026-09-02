@@ -847,14 +847,26 @@ def test_playback_authorization_accepts_null_forbidden_reason():
         },
         "extensions": {"operationName": "PlaybackAccessToken"},
     }
-    gql = GQL(
-        client_session(), post_request=lambda *args, **kwargs: FakeResponse(payload)
-    )
+    requests_sent = []
+
+    def post_request(*_args, **kwargs):
+        requests_sent.append(kwargs["json"])
+        return FakeResponse(payload)
+
+    gql = GQL(client_session(), post_request=post_request)
 
     response = gql.get_playback_access_token("example")
 
     assert response.authorization.is_forbidden is False
     assert response.authorization.forbidden_reason_code is None
+    assert requests_sent[0]["variables"] == {
+        "login": "example",
+        "isLive": True,
+        "isVod": False,
+        "vodID": "",
+        "playerType": "site",
+        "platform": "web",
+    }
 
 
 def test_channel_points_context_accepts_current_query_shape_without_user_ids():

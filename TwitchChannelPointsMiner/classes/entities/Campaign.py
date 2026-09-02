@@ -57,7 +57,12 @@ class Campaign(object):
 
     def clear_drops(self):
         self.drops = list(
-            filter(lambda x: x.dt_match is True and x.is_claimed is False, self.drops)
+            filter(
+                lambda x: x.dt_match is True
+                and x.is_claimed is False
+                and x.required_subs == 0,
+                self.drops,
+            )
         )
 
     def __eq__(self, other):

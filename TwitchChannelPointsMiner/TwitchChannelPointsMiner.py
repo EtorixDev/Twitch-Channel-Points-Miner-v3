@@ -534,6 +534,7 @@ class TwitchChannelPointsMiner:
         blacklist: list = [],
         followers: bool = False,
         followers_order: FollowersOrder = FollowersOrder.ASC,
+        followers_refresh_interval_hours: float = 1,
         categories: list = [],
         category_drops_enabled: bool = True,
         category_limit: int = 30,
@@ -558,6 +559,7 @@ class TwitchChannelPointsMiner:
             blacklist=blacklist,
             followers=followers,
             followers_order=followers_order,
+            followers_refresh_interval_hours=followers_refresh_interval_hours,
             categories=categories,
             category_drops_enabled=category_drops_enabled,
             category_limit=category_limit,
@@ -584,6 +586,7 @@ class TwitchChannelPointsMiner:
         blacklist: list = [],
         followers: bool = False,
         followers_order: FollowersOrder = FollowersOrder.ASC,
+        followers_refresh_interval_hours: float = 1,
         categories: list = [],
         category_drops_enabled: bool = True,
         category_limit: int = 30,
@@ -967,6 +970,16 @@ class TwitchChannelPointsMiner:
                 if effective_category_refresh_seconds > 0
                 else None
             )
+            followers_refresh_interval_seconds = (
+                max(followers_refresh_interval_hours, 0.5) * 60 * 60
+                if followers_refresh_interval_hours > 0
+                else 0
+            )
+            next_followers_refresh_at = (
+                time.time() + followers_refresh_interval_seconds
+                if followers is True and followers_refresh_interval_seconds > 0
+                else None
+            )
             upcoming_drop_start = self.twitch.next_upcoming_drop_start()
             if upcoming_drop_start is not None and next_category_refresh_at is not None:
                 next_category_refresh_at = min(
@@ -1000,6 +1013,18 @@ class TwitchChannelPointsMiner:
                             self.twitch.load_channel_points_context(
                                 self.streamers[index]
                             )
+
+                if (
+                    next_followers_refresh_at is not None
+                    and time.time() >= next_followers_refresh_at
+                ):
+                    self.refresh_followers(
+                        followers_order=followers_order,
+                        blacklist=blacklist,
+                    )
+                    next_followers_refresh_at = (
+                        time.time() + followers_refresh_interval_seconds
+                    )
 
                 if (
                     categories
@@ -1632,6 +1657,29 @@ class TwitchChannelPointsMiner:
         with self.config_reload_lock:
             self._add_streamers(streamers)
 
+    def refresh_followers(self, followers_order=FollowersOrder.ASC, blacklist=()):
+        """Add channels followed since this miner session started."""
+        followers = self.twitch.get_followers(order=followers_order)
+        blocked = {str(username).lower().strip() for username in blacklist}
+        with self.config_reload_lock:
+            existing = {streamer.username: streamer for streamer in self.streamers}
+            additions = []
+            for username in _unique_streamer_names(followers):
+                username = str(username).lower().strip()
+                if not username or username in blocked:
+                    continue
+                if username in existing:
+                    existing[username].from_followers = True
+                    continue
+                additions.append(Streamer(username, from_followers=True))
+            self._add_streamers(additions, explicitly_configured=False)
+
+        logger.info(
+            f"Followed-channel refresh complete: {len(followers)} followed, "
+            f"{len(additions)} added",
+            extra={"emoji": ":arrows_counterclockwise:"},
+        )
+
     def remove_streamers(self, usernames):
         """Remove explicit streamers from a running miner safely."""
         if not self.running or self.ws_pool is None:
@@ -1670,7 +1718,7 @@ class TwitchChannelPointsMiner:
             self.streamers[:] = retained
             self.original_streamers[:] = retained_baselines
 
-    def _add_streamers(self, streamers):
+    def _add_streamers(self, streamers, explicitly_configured=True):
         existing = {streamer.username for streamer in self.streamers}
         for configured in streamers:
             username = (
@@ -1686,7 +1734,7 @@ class TwitchChannelPointsMiner:
                     if isinstance(configured, Streamer)
                     else Streamer(username)
                 )
-                streamer.explicitly_configured = True
+                streamer.explicitly_configured = explicitly_configured
                 streamer.channel_id = self.twitch.get_channel_id(username)
                 streamer.settings = set_default_settings(
                     streamer.settings, Settings.streamer_settings
@@ -1723,7 +1771,8 @@ class TwitchChannelPointsMiner:
                         PubsubTopic("community-points-channel-v1", streamer=streamer)
                     )
                 logger.info(
-                    f"Added {streamer.username} from the reloaded configuration",
+                    f"Added {streamer.username} from "
+                    f"{'the reloaded configuration' if explicitly_configured else 'followed channels'}",
                     extra={"emoji": ":heavy_plus_sign:"},
                 )
             except StreamerDoesNotExistException:

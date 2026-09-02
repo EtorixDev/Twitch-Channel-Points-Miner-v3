@@ -11,6 +11,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
     StreamerSettings,
 )
 from TwitchChannelPointsMiner.classes.Settings import Settings
+from TwitchChannelPointsMiner.classes.Settings import FollowersOrder
 
 
 class FakeCatalog:
@@ -67,6 +68,12 @@ class FakeTwitch:
         streamer.is_online = True
 
 
+class FakeFollowersTwitch(FakeTwitch):
+    def get_followers(self, order):
+        assert order is FollowersOrder.ASC
+        return ["configured", "new-follower", "blocked", "new-follower"]
+
+
 class FakeWebSocketsPool:
     def __init__(self):
         self.topics = []
@@ -77,6 +84,45 @@ class FakeWebSocketsPool:
 
     def remove_streamer_topics(self, streamer):
         self.removed.append(streamer.username)
+
+
+def test_followed_channel_refresh_adds_new_channels_without_restarting():
+    defaults = StreamerSettings(
+        make_predictions=False,
+        follow_raid=False,
+        claim_drops=True,
+        claim_moments=False,
+        watch_streak=True,
+        community_goals=False,
+        chat=ChatPresence.NEVER,
+    )
+    defaults.default()
+    defaults.bet.default()
+    Settings.streamer_settings = defaults
+
+    miner = TwitchChannelPointsMiner.__new__(TwitchChannelPointsMiner)
+    configured = Streamer("configured", explicitly_configured=True)
+    miner.username = "testuser"
+    miner.twitch = FakeFollowersTwitch()
+    miner.streamers = [configured]
+    miner.original_streamers = [100]
+    miner.ws_pool = FakeWebSocketsPool()
+    miner.config_reload_lock = threading.Lock()
+    miner.sync_campaigns_thread = object()
+
+    miner.refresh_followers(
+        followers_order=FollowersOrder.ASC,
+        blacklist=["blocked"],
+    )
+
+    assert [streamer.username for streamer in miner.streamers] == [
+        "configured",
+        "new-follower",
+    ]
+    assert miner.original_streamers == [100, 0]
+    assert configured.from_followers is True
+    assert miner.streamers[1].from_followers is True
+    assert miner.streamers[1].explicitly_configured is False
 
 
 def test_auto_mine_badge_campaigns_adds_drop_streamers_and_honors_blacklist():

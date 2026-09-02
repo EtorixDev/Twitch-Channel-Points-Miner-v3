@@ -36,11 +36,7 @@ class Discord(object):
                     content = f"`{message}`"
                 response = requests.post(
                     url=self.webhook_api,
-                    data={
-                        "content": content,
-                        "username": "Twitch Channel Points Miner",
-                        "avatar_url": "https://i.imgur.com/X9fEkhT.png",
-                    },
+                    data={"content": content},
                     timeout=(5, 15),
                 )
                 response.raise_for_status()

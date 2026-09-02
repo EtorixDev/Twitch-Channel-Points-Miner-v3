@@ -12,7 +12,7 @@ import stat
 import tempfile
 from pathlib import Path
 
-CONFIG_VERSION = 7
+CONFIG_VERSION = 8
 STREAMER_SETTINGS_DEFAULTS = (
     ("make_predictions", "True"),
     ("follow_raid", "True"),
@@ -93,6 +93,7 @@ MINE_CONFIG_DEFAULTS = (
     ("blacklist", "[]"),
     ("followers", "False"),
     ("followers_order", '"ASC"'),
+    ("followers_refresh_interval_hours", "1"),
     ("categories", "[]"),
     ("category_drops_enabled", "True"),
     ("category_limit", "30"),

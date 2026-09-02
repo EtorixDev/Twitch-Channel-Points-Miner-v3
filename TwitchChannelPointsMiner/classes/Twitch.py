@@ -1057,6 +1057,9 @@ class Twitch(object):
 
     def __has_incomplete_drop_in_campaign(self, campaign_dict: dict) -> bool:
         for drop_dict in campaign_dict.get("timeBasedDrops", []) or []:
+            if (drop_dict.get("requiredSubs", 0) or 0) > 0:
+                continue
+
             drop_self = drop_dict.get("self")
             if not isinstance(drop_self, dict):
                 continue
@@ -1371,6 +1374,9 @@ class Twitch(object):
 
         for drop in campaign.get("timeBasedDrops", []) or []:
             if not isinstance(drop, dict):
+                continue
+
+            if (drop.get("requiredSubs", 0) or 0) > 0:
                 continue
 
             drop_id = drop.get("id")

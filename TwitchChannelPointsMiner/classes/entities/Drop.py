@@ -22,6 +22,7 @@ class Drop(object):
         "benefit_edges",
         "item_art_url",
         "minutes_required",
+        "required_subs",
         "has_preconditions_met",
         "current_minutes_watched",
         "drop_instance_id",
@@ -47,6 +48,7 @@ class Drop(object):
         self.benefit = ", ".join(benefit_names)
         self.item_art_url = self.__extract_item_art_url(self.benefit_edges)
         self.minutes_required = dict["requiredMinutesWatched"]
+        self.required_subs = dict.get("requiredSubs", 0) or 0
 
         self.has_preconditions_met = None  # [True, False], None we don't know
         self.current_minutes_watched = 0

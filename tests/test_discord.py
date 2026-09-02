@@ -14,11 +14,7 @@ def test_discord_formats_single_line_as_inline_code():
 
     request.assert_called_once_with(
         url="https://example.com/discord",
-        data={
-            "content": "`hello #channel`",
-            "username": "Twitch Channel Points Miner",
-            "avatar_url": "https://i.imgur.com/X9fEkhT.png",
-        },
+        data={"content": "`hello #channel`"},
         timeout=(5, 15),
     )
 
@@ -37,11 +33,7 @@ def test_discord_formats_multiline_message_as_code_block():
 
     request.assert_called_once_with(
         url="https://example.com/discord",
-        data={
-            "content": "```\nCampaign: Example\nProgress: 50%\n```",
-            "username": "Twitch Channel Points Miner",
-            "avatar_url": "https://i.imgur.com/X9fEkhT.png",
-        },
+        data={"content": "```\nCampaign: Example\nProgress: 50%\n```"},
         timeout=(5, 15),
     )
 
