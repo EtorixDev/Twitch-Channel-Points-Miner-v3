@@ -2,8 +2,13 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 
 import pytest
+from colorama import Fore
 
-from TwitchChannelPointsMiner.logger import LoggerSettings, configure_loggers
+from TwitchChannelPointsMiner.logger import (
+    GlobalFormatter,
+    LoggerSettings,
+    configure_loggers,
+)
 
 
 @pytest.mark.parametrize("value", [True, 0, -1, 1.5, "7"])
@@ -36,3 +41,23 @@ def test_file_logs_rotate_at_midnight_with_configured_retention(tmp_path, monkey
         for handler in set(root_logger.handlers) - existing_handlers:
             root_logger.removeHandler(handler)
         root_logger.setLevel(existing_level)
+
+
+def test_console_formatter_strips_inline_colors_when_colors_are_disabled():
+    settings = LoggerSettings(emoji=False, colored=False)
+    settings.username = ""
+    formatter = GlobalFormatter(
+        fmt="%(message)s",
+        settings=settings,
+    )
+    record = logging.LogRecord(
+        name="test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg=f"{Fore.GREEN}Watching for points{Fore.RESET}",
+        args=(),
+        exc_info=None,
+    )
+
+    assert formatter.format(record) == "Watching for points"

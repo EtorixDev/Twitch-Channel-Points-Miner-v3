@@ -2,6 +2,7 @@ import logging
 import os
 import platform
 import queue
+import re
 import sys
 from datetime import datetime
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
@@ -21,6 +22,9 @@ from TwitchChannelPointsMiner.classes.Settings import Events
 from TwitchChannelPointsMiner.classes.Telegram import Telegram
 from TwitchChannelPointsMiner.classes.Webhook import Webhook
 from TwitchChannelPointsMiner.utils import remove_emoji
+
+
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 # Fore: BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE, RESET.
@@ -241,6 +245,9 @@ class GlobalFormatter(logging.Formatter):
             # With the update of Stream class, the Stream Title may contain emoji
             # Full remove using a method from utils.
             record.msg = remove_emoji(record.msg)
+
+        if self.settings.colored is False:
+            record.msg = ANSI_ESCAPE.sub("", record.msg)
 
         record.msg = self.settings.username + record.msg
 
