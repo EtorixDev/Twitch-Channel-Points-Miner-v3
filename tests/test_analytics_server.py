@@ -1,4 +1,6 @@
+import os
 import re
+import time
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,13 +8,238 @@ from types import SimpleNamespace
 from TwitchChannelPointsMiner.classes.AnalyticsServer import (
     AnalyticsServer,
     MAX_LOG_TAIL_BYTES,
+    TTLResponseCache,
     UPDATE_DISMISSAL_COOKIE,
     bounded_log_start,
     filter_datas,
     get_streamer_summary,
     seek_log_start,
+    streamers_available,
 )
 from TwitchChannelPointsMiner.classes.Settings import Settings
+
+
+def test_ttl_response_cache_expires_after_ttl():
+    cache = TTLResponseCache(ttl_seconds=0.05)
+
+    cache.set("key", "payload")
+    assert cache.get("key") == "payload"
+
+    time.sleep(0.06)
+    assert cache.get("key") is None
+
+
+def test_ttl_response_cache_disabled_with_zero_ttl():
+    cache = TTLResponseCache(ttl_seconds=0)
+
+    cache.set("key", "payload")
+
+    assert cache.get("key") is None
+
+
+def test_ttl_response_cache_clear_drops_all_entries():
+    cache = TTLResponseCache(ttl_seconds=60)
+
+    cache.set("a", "1")
+    cache.set("b", "2")
+    cache.clear()
+
+    assert cache.get("a") is None
+    assert cache.get("b") is None
+
+
+def test_ttl_response_cache_sweeps_expired_entries_on_set():
+    # A caller that varies its key per-request (e.g. keying on a file's
+    # mtime, as /now_watching does) must not accumulate one entry forever -
+    # once its old key has expired, the next unrelated set() call should
+    # sweep it away rather than leaving it for a get() that will never come.
+    cache = TTLResponseCache(ttl_seconds=0.05)
+
+    cache.set("now_watching:1", "a")
+    time.sleep(0.06)
+    cache.set("now_watching:2", "b")
+    cache.set("unrelated", "c")
+
+    assert len(cache._entries) == 2
+    assert "now_watching:1" not in cache._entries
+    assert cache.get("now_watching:2") == "b"
+    assert cache.get("unrelated") == "c"
+
+
+def test_streamers_endpoint_uses_ttl_cache(monkeypatch, tmp_path):
+    import json as json_module
+
+    from TwitchChannelPointsMiner.classes import AnalyticsServer as analytics_module
+
+    monkeypatch.setattr(Settings, "analytics_path", str(tmp_path), raising=False)
+    (tmp_path / "example.json").write_text(
+        '{"series": [{"x": 10, "y": 100}]}', encoding="utf-8"
+    )
+    analytics_module.response_cache.clear()
+    calls = []
+    original_summary = analytics_module.get_streamer_summary
+
+    def counting_summary(streamer):
+        calls.append(streamer)
+        return original_summary(streamer)
+
+    monkeypatch.setattr(analytics_module, "get_streamer_summary", counting_summary)
+    server = AnalyticsServer(password=None)
+    client = server.app.test_client()
+
+    first = client.get("/streamers")
+    second = client.get("/streamers")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert json_module.loads(first.get_data(as_text=True)) == json_module.loads(
+        second.get_data(as_text=True)
+    )
+    # Second request must be served from cache without re-reading files.
+    assert len(calls) == 1
+
+    analytics_module.response_cache.clear()
+
+
+def test_streamers_available_excludes_now_watching_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(Settings, "analytics_path", str(tmp_path), raising=False)
+    (tmp_path / "example.json").write_text(
+        '{"series": [{"x": 10, "y": 100}]}', encoding="utf-8"
+    )
+    (tmp_path / "now_watching.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "drops_by_category.json").write_text(
+        '{"drops": []}', encoding="utf-8"
+    )
+
+    assert streamers_available() == ["example.json"]
+
+
+def test_now_watching_endpoint_missing_file_returns_empty_list(monkeypatch, tmp_path):
+    import json as json_module
+
+    from TwitchChannelPointsMiner.classes import AnalyticsServer as analytics_module
+
+    monkeypatch.setattr(Settings, "analytics_path", str(tmp_path), raising=False)
+    analytics_module.response_cache.clear()
+    server = AnalyticsServer(password=None)
+
+    response = server.app.test_client().get("/now_watching")
+
+    assert response.status_code == 200
+    assert json_module.loads(response.get_data(as_text=True)) == []
+    analytics_module.response_cache.clear()
+
+
+def test_now_watching_endpoint_round_trips_well_formed_file(monkeypatch, tmp_path):
+    import json as json_module
+
+    from TwitchChannelPointsMiner.classes import AnalyticsServer as analytics_module
+
+    monkeypatch.setattr(Settings, "analytics_path", str(tmp_path), raising=False)
+    entries = [
+        {"username": "alice", "reason": "drops", "game": "Foo", "channel_points": 10},
+        {"username": "bob", "reason": "points", "game": None, "channel_points": 5},
+    ]
+    (tmp_path / "now_watching.json").write_text(
+        json_module.dumps(entries), encoding="utf-8"
+    )
+    analytics_module.response_cache.clear()
+    server = AnalyticsServer(password=None)
+
+    response = server.app.test_client().get("/now_watching")
+
+    assert response.status_code == 200
+    assert json_module.loads(response.get_data(as_text=True)) == entries
+    analytics_module.response_cache.clear()
+
+
+def test_now_watching_endpoint_malformed_json_degrades_to_empty_list(
+    monkeypatch, tmp_path
+):
+    import json as json_module
+
+    from TwitchChannelPointsMiner.classes import AnalyticsServer as analytics_module
+
+    monkeypatch.setattr(Settings, "analytics_path", str(tmp_path), raising=False)
+    (tmp_path / "now_watching.json").write_text("not json", encoding="utf-8")
+    analytics_module.response_cache.clear()
+    server = AnalyticsServer(password=None)
+
+    response = server.app.test_client().get("/now_watching")
+
+    assert response.status_code == 200
+    assert json_module.loads(response.get_data(as_text=True)) == []
+    analytics_module.response_cache.clear()
+
+
+def test_now_watching_endpoint_uses_ttl_cache(monkeypatch, tmp_path):
+    import json as json_module
+
+    from TwitchChannelPointsMiner.classes import AnalyticsServer as analytics_module
+
+    monkeypatch.setattr(Settings, "analytics_path", str(tmp_path), raising=False)
+    entries = [{"username": "alice", "reason": "badge", "game": "Foo", "channel_points": 1}]
+    now_watching_file = tmp_path / "now_watching.json"
+    now_watching_file.write_text(json_module.dumps(entries), encoding="utf-8")
+    analytics_module.response_cache.clear()
+
+    calls = []
+    original_open = open
+
+    def counting_open(path, *args, **kwargs):
+        if str(path) == str(now_watching_file):
+            calls.append(path)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(analytics_module, "open", counting_open, raising=False)
+    server = AnalyticsServer(password=None)
+    client = server.app.test_client()
+
+    first = client.get("/now_watching")
+    second = client.get("/now_watching")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert json_module.loads(first.get_data(as_text=True)) == entries
+    assert json_module.loads(second.get_data(as_text=True)) == entries
+    # Second request must be served from cache without re-reading the file.
+    assert len(calls) == 1
+
+    analytics_module.response_cache.clear()
+
+
+def test_now_watching_endpoint_serves_fresh_data_after_file_update(
+    monkeypatch, tmp_path
+):
+    import json as json_module
+
+    from TwitchChannelPointsMiner.classes import AnalyticsServer as analytics_module
+
+    monkeypatch.setattr(Settings, "analytics_path", str(tmp_path), raising=False)
+    now_watching_file = tmp_path / "now_watching.json"
+    now_watching_file.write_text(
+        json_module.dumps([{"username": "alice"}]), encoding="utf-8"
+    )
+    analytics_module.response_cache.clear()
+    server = AnalyticsServer(password=None)
+    client = server.app.test_client()
+
+    first = client.get("/now_watching")
+    assert json_module.loads(first.get_data(as_text=True)) == [{"username": "alice"}]
+
+    # Simulate the miner overwriting the file with a new mtime - the cache
+    # is keyed on mtime specifically so this must not be served stale even
+    # though the shared TTL has not expired.
+    updated_mtime = os.path.getmtime(now_watching_file) + 5
+    now_watching_file.write_text(
+        json_module.dumps([{"username": "bob"}]), encoding="utf-8"
+    )
+    os.utime(now_watching_file, (updated_mtime, updated_mtime))
+
+    second = client.get("/now_watching")
+    assert json_module.loads(second.get_data(as_text=True)) == [{"username": "bob"}]
+
+    analytics_module.response_cache.clear()
 
 
 def test_bounded_log_start_caps_legacy_request_without_tail_bytes():
@@ -275,6 +502,27 @@ def test_points_tab_reapplies_annotations_after_becoming_visible():
     assert 'pointSeries = response["series"] || [];' in script
 
 
+def test_now_watching_widget_jumps_to_drops_tab_on_click():
+    script = (Path(__file__).resolve().parents[1] / "assets" / "script.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function getNowWatching()" in script
+    assert "function renderNowWatching(entries)" in script
+    assert "'./now_watching'" in script
+
+    render_now_watching = script.split("function renderNowWatching", 1)[1].split(
+        "function getNowWatching", 1
+    )[0]
+
+    assert "switchDashboardTab('drops');" in render_now_watching
+    assert "changeDropCategory(entry.game);" in render_now_watching
+    # A drops/badge entry with no known game (entry.game is null) must not
+    # be wired to changeDropCategory(null), which would corrupt the saved
+    # Drops-tab category selection.
+    assert "&& entry.game)" in render_now_watching
+
+
 def test_points_chart_translates_logger_month_token_for_apexcharts():
     script = (Path(__file__).resolve().parents[1] / "assets" / "script.js").read_text(
         encoding="utf-8"
@@ -364,18 +612,23 @@ def test_dark_theme_keeps_config_panel_headings_readable():
     assert "#config-panel .input::placeholder" in stylesheet
 
 
-def test_successful_config_message_fades_after_ten_seconds():
-    script = (Path(__file__).resolve().parents[1] / "assets" / "script.js").read_text(
-        encoding="utf-8"
-    )
-    show_message = script.split("function showConfigMessage", 1)[1].split(
-        "function loadWebConfig", 1
-    )[0]
+def test_config_messages_render_as_dismissible_toasts():
+    root = Path(__file__).resolve().parents[1]
+    template = (root / "assets" / "charts.html").read_text(encoding="utf-8")
+    script = (root / "assets" / "script.js").read_text(encoding="utf-8")
 
-    assert "if (!isError)" in show_message
-    assert "clearTimeout(configMessageTimeout);" in show_message
-    assert "$('#config-message').fadeOut(250);" in show_message
-    assert "}, 10000);" in show_message
+    assert 'id="toast-container"' in template
+    assert "config-message" not in template
+    assert "configMessageTimeout" not in script
+
+    show_message = script.split("function showConfigMessage", 1)[1].split(
+        "\nfunction loadWebConfig", 1
+    )[0]
+    assert "$('#toast-container').append(toast);" in show_message
+    assert "toast-close" in show_message
+    # Success toasts auto-dismiss; errors persist until the user closes them.
+    auto_dismiss_branch = show_message.split("if (!isError)", 1)[1]
+    assert "setTimeout(dismiss, 5000);" in auto_dismiss_branch
 
 
 def test_config_ui_exposes_requested_management_controls():
@@ -414,8 +667,68 @@ def test_config_ui_exposes_requested_management_controls():
     assert "update_updates" in script
     assert "interval_hours: startupOnly ? undefined" in script
     assert "/config/notifications/${encodeURIComponent(provider)}/test" in script
-    assert "'aria-label': `Move ${category} up`" in script
-    assert "'aria-label': `Move ${category} down`" in script
+    assert "reorder_streamers" in script
+    assert "Sortable.create" in script
+
+
+def test_web_config_lists_support_drag_and_drop_reordering():
+    root = Path(__file__).resolve().parents[1]
+    template = (root / "assets" / "charts.html").read_text(encoding="utf-8")
+    script = (root / "assets" / "script.js").read_text(encoding="utf-8")
+
+    assert "sortablejs" in template.lower()
+
+    make_sortable_fn = script.split("function makeSortable", 1)[1].split(
+        "\nfunction renderConfiguredStreamers", 1
+    )[0]
+    assert "Sortable.create(containerEl" in make_sortable_fn
+    assert "handle: '.drag-handle'" in make_sortable_fn
+    assert "ghostClass: 'sortable-ghost'" in make_sortable_fn
+    # Dropping a row back where it started still fires onEnd -- must not
+    # save when nothing actually moved.
+    assert "evt.oldIndex !== evt.newIndex" in make_sortable_fn
+
+    streamers_fn = script.split("function renderConfiguredStreamers", 1)[1].split(
+        "\nfunction renderConfiguredCategories", 1
+    )[0]
+    assert "makeSortable(container[0]" in streamers_fn
+    assert "action: 'reorder_streamers'" in streamers_fn
+
+    categories_fn = script.split("function renderConfiguredCategories", 1)[1].split(
+        "\nvar SOURCE_LABELS", 1
+    )[0]
+    assert "makeSortable(container[0]" in categories_fn
+    assert "action: 'reorder_categories'" in categories_fn
+    # The up/down buttons are gone -- reordering is drag-only.
+    assert "move-category-up" not in script
+    assert "move-category-down" not in script
+
+    sources_fn = script.split("function renderSourceSettings", 1)[1].split(
+        "\nfunction showConfigMessage", 1
+    )[0]
+    assert "makeSortable(container[0]" in sources_fn
+
+    save_sources_fn = script.split("function saveSourceSettings", 1)[1].split(
+        "\nfunction saveLoggingSettings", 1
+    )[0]
+    assert "order:" in save_sources_fn
+    assert "data('source-row')" in save_sources_fn
+
+
+def test_failed_config_update_resyncs_from_server():
+    script = (Path(__file__).resolve().parents[1] / "assets" / "script.js").read_text(
+        encoding="utf-8"
+    )
+    update_web_config_fn = script.split("function updateWebConfig", 1)[1].split(
+        "\nfunction saveStreamerSettings", 1
+    )[0]
+    fail_branch = update_web_config_fn.split(").fail(function (xhr) {", 1)[1].split(
+        "}).always(", 1
+    )[0]
+
+    # A failed write (e.g. a dropped reorder) must not leave the DOM showing
+    # an order/state that was never actually saved.
+    assert "loadWebConfig();" in fail_branch
 
 
 def test_notification_forms_do_not_nest_two_column_grids():
